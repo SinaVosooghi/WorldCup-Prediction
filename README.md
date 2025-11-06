@@ -102,8 +102,8 @@ npm run seed              # Seed data
 
 ## Testing
 
-- **Unit Tests**: 27/27 passing
-- **E2E Tests**: 164/164 passing (100%)
+- **Unit Tests**: 134/134 passing
+- **E2E Tests**: 175/175 passing (100%)
 - **Coverage**: All critical requirements tested
 
 Run E2E tests:
@@ -150,7 +150,6 @@ REFRESH_TOKEN_TTL_SECONDS=2592000
 - **[Getting Started Guide](GETTING_STARTED.md)** - Setup and configuration
 - **[API Documentation](docs/API.md)** - Complete API reference
 - **[Deployment Guide](docs/DEPLOYMENT.md)** - Production deployment
-- **[RabbitMQ Scalability](docs/RABBITMQ_SCALABILITY.md)** - Queue configuration
 
 ## Architecture Highlights
 
