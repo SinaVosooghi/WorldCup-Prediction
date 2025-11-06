@@ -1,0 +1,114 @@
+# Shared infrastructure service definitions
+# Modern Compose Specification format (no version field)
+# Usage: docker-compose -f docker-compose.shared.yml -f <env-file>.yml up
+
+# x- extension keys for reusable configuration blocks
+x-healthcheck-postgres: &healthcheck-postgres
+  test: ['CMD-SHELL', 'pg_isready -U ${DATABASE_USERNAME:-postgres}']
+  interval: 10s
+  timeout: 5s
+  retries: 5
+
+x-healthcheck-redis: &healthcheck-redis
+  test: ['CMD', 'redis-cli', 'ping']
+  interval: 10s
+  timeout: 3s
+  retries: 5
+
+x-healthcheck-rabbitmq: &healthcheck-rabbitmq
+  test: ['CMD', 'rabbitmq-diagnostics', '-q', 'ping']
+  interval: 30s
+  timeout: 10s
+  retries: 5
+  start_period: 40s
+
+x-healthcheck-pgadmin: &healthcheck-pgadmin
+  test: ['CMD', 'wget', '--quiet', '--tries=1', '--spider', 'http://localhost/misc/ping']
+  interval: 30s
+  timeout: 10s
+  retries: 3
+  start_period: 40s
+
+# Common service configurations
+x-postgres-common: &postgres-common
+  image: postgres:15-alpine
+  environment:
+    POSTGRES_DB: ${DATABASE_NAME:-worldcup_predictions}
+    POSTGRES_USER: ${DATABASE_USERNAME:-postgres}
+    POSTGRES_PASSWORD: ${DATABASE_PASSWORD:-postgres}
+  ports:
+    - '${POSTGRES_PORT:-5432}:5432'
+  healthcheck: *healthcheck-postgres
+
+x-redis-common: &redis-common
+  image: redis:7-alpine
+  command: redis-server --appendonly yes ${REDIS_PASSWORD:+--requirepass $REDIS_PASSWORD}
+  ports:
+    - '${REDIS_PORT:-6379}:6379'
+  healthcheck: *healthcheck-redis
+
+x-rabbitmq-common: &rabbitmq-common
+  image: rabbitmq:3.12-management-alpine
+  environment:
+    RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
+    RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-guest}
+  ports:
+    - '${RABBITMQ_PORT:-5672}:5672'
+    - '${RABBITMQ_MANAGEMENT_PORT:-15672}:15672'
+  healthcheck: *healthcheck-rabbitmq
+
+x-pgadmin-common: &pgadmin-common
+  image: dpage/pgadmin4:latest
+  environment:
+    PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@admin.com}
+    PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin}
+    PGADMIN_CONFIG_SERVER_MODE: 'False'
+  ports:
+    - '${PGADMIN_PORT:-5050}:80'
+  healthcheck: *healthcheck-pgadmin
+
+services:
+  postgres:
+    <<: *postgres-common
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - app-network
+
+  redis:
+    <<: *redis-common
+    volumes:
+      - redis_data:/data
+    networks:
+      - app-network
+
+  rabbitmq:
+    <<: *rabbitmq-common
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - app-network
+
+  pgadmin:
+    <<: *pgadmin-common
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  rabbitmq_data:
+    driver: local
+  pgadmin_data:
+    driver: local

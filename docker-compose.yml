@@ -1,0 +1,246 @@
+# Production compose file
+# Modern Compose Specification format (no version field)
+# Usage: docker-compose up
+
+# x- extension keys for reusable configuration blocks
+x-healthcheck-postgres: &healthcheck-postgres
+  test: ['CMD-SHELL', 'pg_isready -U ${DATABASE_USERNAME:-postgres}']
+  interval: 10s
+  timeout: 5s
+  retries: 5
+
+x-healthcheck-redis: &healthcheck-redis
+  test: ['CMD', 'redis-cli', 'ping']
+  interval: 10s
+  timeout: 3s
+  retries: 5
+
+x-healthcheck-rabbitmq: &healthcheck-rabbitmq
+  test: ['CMD', 'rabbitmq-diagnostics', '-q', 'ping']
+  interval: 30s
+  timeout: 10s
+  retries: 5
+  start_period: 40s
+
+x-healthcheck-pgadmin: &healthcheck-pgadmin
+  test: ['CMD', 'wget', '--quiet', '--tries=1', '--spider', 'http://localhost/misc/ping']
+  interval: 30s
+  timeout: 10s
+  retries: 3
+  start_period: 40s
+
+x-healthcheck-app: &healthcheck-app
+  test: ['CMD', 'wget', '--quiet', '--tries=1', '--spider', 'http://localhost:3000/prediction/teams']
+  interval: 30s
+  timeout: 10s
+  retries: 3
+  start_period: 40s
+
+# Common restart policy
+x-restart-policy: &restart-policy
+  restart: unless-stopped
+
+# Common infrastructure service configurations
+x-postgres-prod: &postgres-prod
+  image: postgres:15-alpine
+  <<: *restart-policy
+  environment:
+    POSTGRES_DB: ${DATABASE_NAME:-worldcup_predictions}
+    POSTGRES_USER: ${DATABASE_USERNAME:-postgres}
+    POSTGRES_PASSWORD: ${DATABASE_PASSWORD:-postgres}
+    PGDATA: /var/lib/postgresql/data/pgdata
+  volumes:
+    - postgres_data:/var/lib/postgresql/data
+  ports:
+    - '${POSTGRES_PORT:-5432}:5432'
+  networks:
+    - worldcup-network
+  healthcheck: *healthcheck-postgres
+
+x-redis-prod: &redis-prod
+  image: redis:7-alpine
+  <<: *restart-policy
+  command: redis-server --appendonly yes ${REDIS_PASSWORD:+--requirepass $REDIS_PASSWORD}
+  volumes:
+    - redis_data:/data
+  ports:
+    - '${REDIS_PORT:-6379}:6379'
+  networks:
+    - worldcup-network
+  healthcheck: *healthcheck-redis
+
+x-rabbitmq-prod: &rabbitmq-prod
+  image: rabbitmq:3.12-management-alpine
+  <<: *restart-policy
+  environment:
+    RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
+    RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-guest}
+  volumes:
+    - rabbitmq_data:/var/lib/rabbitmq
+  ports:
+    - '${RABBITMQ_PORT:-5672}:5672'
+    - '${RABBITMQ_MANAGEMENT_PORT:-15672}:15672'
+  networks:
+    - worldcup-network
+  healthcheck: *healthcheck-rabbitmq
+
+x-pgadmin-prod: &pgadmin-prod
+  image: dpage/pgadmin4:latest
+  <<: *restart-policy
+  environment:
+    PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@admin.com}
+    PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin}
+    PGADMIN_CONFIG_SERVER_MODE: 'False'
+  volumes:
+    - pgadmin_data:/var/lib/pgadmin
+  ports:
+    - '${PGADMIN_PORT:-5050}:80'
+  networks:
+    - worldcup-network
+  healthcheck: *healthcheck-pgadmin
+
+# Common app environment variables
+x-app-env: &app-env
+  NODE_ENV: ${NODE_ENV:-production}
+  PORT: ${PORT:-3000}
+  DATABASE_HOST: postgres
+  DATABASE_PORT: 5432
+  DATABASE_USERNAME: ${DATABASE_USERNAME:-postgres}
+  DATABASE_PASSWORD: ${DATABASE_PASSWORD:-postgres}
+  DATABASE_NAME: ${DATABASE_NAME:-worldcup_predictions}
+  REDIS_HOST: redis
+  REDIS_PORT: 6379
+  REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+  RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
+  SMS_API_KEY: ${SMS_API_KEY:-}
+  SMS_SANDBOX: ${SMS_SANDBOX:-true}
+  OTP_TTL: ${OTP_TTL:-120}
+  MAX_OTP_ATTEMPTS: ${MAX_OTP_ATTEMPTS:-5}
+  SESSION_TTL: ${SESSION_TTL:-2592000}
+
+# Common database connection environment
+x-db-env: &db-env
+  DATABASE_HOST: postgres
+  DATABASE_PORT: 5432
+  DATABASE_USERNAME: ${DATABASE_USERNAME:-postgres}
+  DATABASE_PASSWORD: ${DATABASE_PASSWORD:-postgres}
+  DATABASE_NAME: ${DATABASE_NAME:-worldcup_predictions}
+
+services:
+  app:
+    build:
+      context: .
+      target: production
+      dockerfile: Dockerfile
+    container_name: worldcup-prediction-app
+    <<: *restart-policy
+    ports:
+      - '${PORT:-3000}:3000'
+    environment:
+      <<: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - worldcup-network
+    healthcheck: *healthcheck-app
+
+  # Prediction processing workers (3 replicas for scalability)
+  worker:
+    build:
+      context: .
+      target: production
+      dockerfile: Dockerfile
+    <<: *restart-policy
+    command: npm run start:worker
+    environment:
+      <<: *app-env
+      WORKER_MODE: 'true'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - worldcup-network
+    deploy:
+      replicas: 3
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+
+  postgres:
+    <<: *postgres-prod
+    container_name: worldcup-postgres
+
+  redis:
+    <<: *redis-prod
+    container_name: worldcup-redis
+
+  rabbitmq:
+    <<: *rabbitmq-prod
+    container_name: worldcup-rabbitmq
+
+  pgadmin:
+    <<: *pgadmin-prod
+    container_name: worldcup-pgadmin
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # Optional: Database migration runner
+  migration:
+    build:
+      context: .
+      target: development
+      dockerfile: Dockerfile
+    container_name: worldcup-migration
+    command: npm run migration:run
+    environment:
+      <<: *db-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - worldcup-network
+    profiles:
+      - migration
+
+  # Optional: Database seeder
+  seed:
+    build:
+      context: .
+      target: development
+      dockerfile: Dockerfile
+    container_name: worldcup-seed
+    command: npm run seed
+    environment:
+      <<: *db-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - worldcup-network
+    profiles:
+      - seed
+
+networks:
+  worldcup-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  rabbitmq_data:
+    driver: local
+  pgadmin_data:
+    driver: local

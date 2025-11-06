@@ -1,0 +1,131 @@
+# Development environment compose file
+# Modern Compose Specification format (no version field)
+# Usage: docker-compose -f docker-compose.dev.yml up
+
+# x- extension keys for reusable configuration blocks
+x-healthcheck-postgres: &healthcheck-postgres
+  test: ['CMD-SHELL', 'pg_isready -U postgres']
+  interval: 10s
+  timeout: 5s
+  retries: 5
+
+x-healthcheck-redis: &healthcheck-redis
+  test: ['CMD', 'redis-cli', 'ping']
+  interval: 10s
+  timeout: 3s
+  retries: 5
+
+x-healthcheck-rabbitmq: &healthcheck-rabbitmq
+  test: ['CMD', 'rabbitmq-diagnostics', '-q', 'ping']
+  interval: 30s
+  timeout: 10s
+  retries: 5
+  start_period: 40s
+
+x-healthcheck-pgadmin: &healthcheck-pgadmin
+  test: ['CMD', 'wget', '--quiet', '--tries=1', '--spider', 'http://localhost/misc/ping']
+  interval: 30s
+  timeout: 10s
+  retries: 3
+  start_period: 40s
+
+# Common infrastructure service configurations
+x-postgres-dev: &postgres-dev
+  image: postgres:15-alpine
+  environment:
+    POSTGRES_DB: worldcup_predictions
+    POSTGRES_USER: postgres
+    POSTGRES_PASSWORD: postgres
+  volumes:
+    - postgres_data_dev:/var/lib/postgresql/data
+  ports:
+    - '5432:5432'
+  networks:
+    - worldcup-network-dev
+
+x-redis-dev: &redis-dev
+  image: redis:7-alpine
+  command: redis-server --appendonly yes
+  volumes:
+    - redis_data_dev:/data
+  ports:
+    - '6379:6379'
+  networks:
+    - worldcup-network-dev
+
+x-rabbitmq-dev: &rabbitmq-dev
+  image: rabbitmq:3.12-management-alpine
+  environment:
+    RABBITMQ_DEFAULT_USER: guest
+    RABBITMQ_DEFAULT_PASS: guest
+  volumes:
+    - rabbitmq_data_dev:/var/lib/rabbitmq
+  ports:
+    - '5672:5672'
+    - '15672:15672'
+  networks:
+    - worldcup-network-dev
+
+x-pgadmin-dev: &pgadmin-dev
+  image: dpage/pgadmin4:latest
+  environment:
+    PGADMIN_DEFAULT_EMAIL: admin@admin.com
+    PGADMIN_DEFAULT_PASSWORD: admin
+    PGADMIN_CONFIG_SERVER_MODE: 'False'
+  volumes:
+    - pgadmin_data_dev:/var/lib/pgadmin
+  ports:
+    - '5050:80'
+  networks:
+    - worldcup-network-dev
+
+services:
+  app:
+    build:
+      context: .
+      target: development
+      dockerfile: Dockerfile
+    container_name: worldcup-prediction-app-dev
+    command: npm run start:dev
+    volumes:
+      - .:/usr/src/app
+      - /usr/src/app/node_modules
+    environment:
+      NODE_ENV: development
+    ports:
+      - '3000:3000'
+      - '9229:9229' # Debug port
+    depends_on:
+      - postgres
+      - redis
+      - rabbitmq
+    networks:
+      - worldcup-network-dev
+
+  postgres:
+    <<: *postgres-dev
+    container_name: worldcup-postgres-dev
+
+  redis:
+    <<: *redis-dev
+    container_name: worldcup-redis-dev
+
+  rabbitmq:
+    <<: *rabbitmq-dev
+    container_name: worldcup-rabbitmq-dev
+
+  pgadmin:
+    <<: *pgadmin-dev
+    container_name: worldcup-pgadmin-dev
+    depends_on:
+      - postgres
+
+networks:
+  worldcup-network-dev:
+    driver: bridge
+
+volumes:
+  postgres_data_dev:
+  redis_data_dev:
+  rabbitmq_data_dev:
+  pgadmin_data_dev:

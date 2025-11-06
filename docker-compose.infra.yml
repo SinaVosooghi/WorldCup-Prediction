@@ -1,0 +1,114 @@
+# Infrastructure-only compose file (for local development without app container)
+# Modern Compose Specification format (no version field)
+# Usage: docker-compose -f docker-compose.infra.yml up
+
+# x- extension keys for reusable configuration blocks
+x-healthcheck-postgres: &healthcheck-postgres
+  test: ['CMD-SHELL', 'pg_isready -U postgres']
+  interval: 10s
+  timeout: 5s
+  retries: 5
+
+x-healthcheck-redis: &healthcheck-redis
+  test: ['CMD', 'redis-cli', 'ping']
+  interval: 10s
+  timeout: 3s
+  retries: 5
+
+x-healthcheck-rabbitmq: &healthcheck-rabbitmq
+  test: ['CMD', 'rabbitmq-diagnostics', '-q', 'ping']
+  interval: 30s
+  timeout: 10s
+  retries: 5
+  start_period: 40s
+
+x-healthcheck-pgadmin: &healthcheck-pgadmin
+  test: ['CMD', 'wget', '--quiet', '--tries=1', '--spider', 'http://localhost/misc/ping']
+  interval: 30s
+  timeout: 10s
+  retries: 3
+  start_period: 40s
+
+# Common infrastructure service configurations
+x-postgres-infra: &postgres-infra
+  image: postgres:15-alpine
+  environment:
+    POSTGRES_DB: worldcup_predictions
+    POSTGRES_USER: postgres
+    POSTGRES_PASSWORD: postgres
+  volumes:
+    - postgres_data_dev:/var/lib/postgresql/data
+  ports:
+    - '5432:5432'
+  networks:
+    - worldcup-network-dev
+  healthcheck: *healthcheck-postgres
+
+x-redis-infra: &redis-infra
+  image: redis:7-alpine
+  command: redis-server --appendonly yes
+  volumes:
+    - redis_data_dev:/data
+  ports:
+    - '6379:6379'
+  networks:
+    - worldcup-network-dev
+  healthcheck: *healthcheck-redis
+
+x-rabbitmq-infra: &rabbitmq-infra
+  image: rabbitmq:3.12-management-alpine
+  environment:
+    RABBITMQ_DEFAULT_USER: guest
+    RABBITMQ_DEFAULT_PASS: guest
+  volumes:
+    - rabbitmq_data_dev:/var/lib/rabbitmq
+  ports:
+    - '5672:5672'
+    - '15672:15672'
+  networks:
+    - worldcup-network-dev
+  healthcheck: *healthcheck-rabbitmq
+
+x-pgadmin-infra: &pgadmin-infra
+  image: dpage/pgadmin4:latest
+  environment:
+    PGADMIN_DEFAULT_EMAIL: admin@admin.com
+    PGADMIN_DEFAULT_PASSWORD: admin
+    PGADMIN_CONFIG_SERVER_MODE: 'False'
+  volumes:
+    - pgadmin_data_dev:/var/lib/pgadmin
+  ports:
+    - '5050:80'
+  networks:
+    - worldcup-network-dev
+  healthcheck: *healthcheck-pgadmin
+
+services:
+  postgres:
+    <<: *postgres-infra
+    container_name: worldcup-postgres-dev
+
+  redis:
+    <<: *redis-infra
+    container_name: worldcup-redis-dev
+
+  rabbitmq:
+    <<: *rabbitmq-infra
+    container_name: worldcup-rabbitmq-dev
+
+  pgadmin:
+    <<: *pgadmin-infra
+    container_name: worldcup-pgadmin-dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+networks:
+  worldcup-network-dev:
+    driver: bridge
+
+volumes:
+  postgres_data_dev:
+  redis_data_dev:
+  rabbitmq_data_dev:
+  pgadmin_data_dev:
